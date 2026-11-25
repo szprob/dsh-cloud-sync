@@ -43,6 +43,37 @@ dsh plugin --profile desktop add "github:szprob/dsh-cloud-sync"
 
 恢复会覆盖本机同名文件 —— 覆盖前自动备份到 `~/.dsh/cloud-sync/backups/<时间戳>/`，保留最近 10 份。
 
+### 其他插件：一键装回
+
+配置同步**不带插件代码本身** —— `node_modules` 几百 MB，还含平台相关的二进制，跨机器不通用。但只恢复配置的话，新机器上所有第三方插件都会加载失败：
+
+```
+dsh: skipping profile bundle "dsh-connect-trae": cannot resolve profile bundle...
+dsh: skipping profile bundle "dsh-eye-care": cannot resolve profile bundle...
+```
+
+所以「设置 → 云同步」里多了一块 **其他插件**：
+
+1. **导出插件清单** —— 把当前 profile 装了哪些插件写成 `cloud-sync/plugins.json`，随配置一起进仓库
+2. **一键装回全部插件** —— 新机器恢复配置后点一下，按清单装回全部
+
+每次备份前会自动刷新清单，不用记得手动导出。
+
+清单里每条依赖收敛成三种形态：
+
+| 形态 | 例子 | 新机器怎么装 |
+|---|---|---|
+| **registry** | `dsh-connect-trae@4.18.7` | 按名字和版本装 |
+| **git** | `github:szprob/dsh-plugins#path:/packages/eye-care` | 从 GitHub 装 |
+| **手工** | 没有 `repository` 字段的本地包 | 列出来，告诉你要手动装 |
+
+两个关键细节：
+
+- **registry 依赖钉死实际装到的版本**，不照抄 `^4.18.7` 这种范围。照范围装会拿到当时的最新版，一个插件的破坏性更新就能让恢复出来的环境起不来。
+- **`link:` 依赖会从包自己的 `repository` 字段反推**成 `github:` spec。直接把 `link:/Users/songze/...` 抄到新机器，pnpm 只会警告一句并**装出一个 0.0.0 的空包** —— 不报错，但插件是坏的。
+
+装完**必须重启 DSH** 才会加载新插件：插件代码是宿主进程启动时加载的，界面会把这句话说清楚，但不会替用户重启。
+
 ### 定时备份
 
 「设置 → 云同步」底部的 **定时备份** 支持三种周期：
@@ -151,7 +182,7 @@ dsh/
 ## 开发
 
 ```sh
-npm test        # 20 个冒烟测试，不联网
+npm test        # 28 个冒烟测试，不联网
 ```
 
 测试覆盖同步计划（上传 / 删除 / 未变）、路径分类、目录隔离、越界拦截、备份与幂等，
@@ -167,6 +198,8 @@ lib/github.js     GitHub REST 客户端（Git Data API）
 lib/gitcli.js     本机 git 传输
 lib/sync.js       同步引擎：收集、diff、推送、拉取
 lib/service.js    业务编排，UI 与工具共用
+lib/plugins-manifest.js  插件清单：依赖 → 可安装 spec 的反推
+lib/pnpm.js       定位 DSH 自带的 pnpm 并执行安装
 lib/schedule.js   定时备份的排期计算与调度循环
 lib/tools.js      agent 工具
 lib/api.js        HTTP 路由

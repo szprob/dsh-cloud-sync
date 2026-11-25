@@ -26,6 +26,9 @@ import { normalizeConfig, normalizeRepoPath, DEFAULT_INCLUDE } from '../lib/conf
 import {
   computeNextRun, defaultSchedule, describeSchedule, normalizeSchedule, ScheduleRunner,
 } from '../lib/schedule.js'
+import {
+  collectManifest, describeDependency, parseRepositoryUrl, planInstall, summarizeManifest,
+} from '../lib/plugins-manifest.js'
 
 const tests = []
 const test = (name, fn) => tests.push({ name, fn })
@@ -355,6 +358,103 @@ test('ScheduleRunner 里 run 抛错不会打死循环，仍会排下一次', asy
   assert.ok(warned.length > 0, '失败应记日志')
   assert.ok(runner.nextRunAt, '失败后仍要排下一次，否则一次网络抖动就永久停摆')
   runner.stop()
+})
+
+// ---------------- 插件清单 ----------------
+
+test('parseRepositoryUrl 认 https / ssh / shorthand 三种写法', () => {
+  assert.equal(parseRepositoryUrl('git+https://github.com/o/r.git'), 'o/r')
+  assert.equal(parseRepositoryUrl('git@github.com:o/r.git'), 'o/r')
+  assert.equal(parseRepositoryUrl('https://github.com/o/r'), 'o/r')
+  assert.equal(parseRepositoryUrl('github:o/r'), 'o/r')
+  assert.equal(parseRepositoryUrl('gitlab.com/x/y'), undefined)
+  assert.equal(parseRepositoryUrl(undefined), undefined)
+})
+
+test('registry 依赖钉死已装版本，不照抄 ^ 范围', () => {
+  const pinned = describeDependency('p', '^1.2.0', { version: '1.2.5' })
+  assert.equal(pinned.kind, 'registry')
+  assert.equal(pinned.spec, 'p@1.2.5', '必须装回同一个版本，不能拿到当时的最新版')
+  assert.equal(pinned.recorded, '^1.2.0')
+  // 读不到已装 manifest 时退回记录里的范围，但仍然要带上包名
+  // （只写 `^1.2.0` 会被 pnpm 当成一个叫 \"^1.2.0\" 的包去 registry 找，必然 404）
+  assert.equal(describeDependency('p', '^1.2.0', undefined).spec, 'p@1.2.0')
+})
+
+test('link: 依赖从 repository 反推 github spec，monorepo 带 path', () => {
+  const single = describeDependency('a', 'link:/Users/me/a', {
+    version: '1.0.0',
+    repository: { url: 'git+https://github.com/o/r.git' },
+  })
+  assert.equal(single.kind, 'git')
+  assert.equal(single.spec, 'github:o/r')
+
+  const mono = describeDependency('b', 'link:/Users/me/r/packages/b', {
+    version: '1.0.0',
+    repository: { url: 'git+https://github.com/o/r.git', directory: 'packages/b' },
+  })
+  assert.equal(mono.spec, 'github:o/r#path:/packages/b')
+})
+
+test('反推不出的 link: 依赖标成 unresolvable，绝不硬装', () => {
+  const local = describeDependency('local', 'link:/tmp/local', { version: '0.1.0' })
+  assert.equal(local.kind, 'unresolvable')
+  assert.equal(local.spec, undefined, '没有可安装的地址就不该给出 spec 去装空包')
+  assert.ok(local.reason.includes('repository'))
+
+  const manifest = { profiles: [{ profile: 'desktop', plugins: [local, { name: 'ok', kind: 'git', spec: 'github:o/r' }] }] }
+  const plan = planInstall(manifest, 'desktop')
+  assert.deepEqual(plan[0].add, ['github:o/r'], 'unresolvable 不能进安装列表')
+  assert.equal(plan[0].manual.length, 1)
+})
+
+test('collectManifest 跳过官方包，只留有依赖的 profile', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'plg-manifest-'))
+  try {
+    const pdir = join(home, 'profiles/desktop')
+    await mkdir(join(pdir, 'node_modules/demo'), { recursive: true })
+    await writeFile(join(pdir, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-desktop',
+      private: true,
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'demo'] } },
+      dependencies: {
+        '@deepseek-ai/dsh-web-app': '0.2.2',
+        demo: '^2.0.0',
+      },
+    }))
+    await writeFile(join(pdir, 'node_modules/demo/package.json'), JSON.stringify({ name: 'demo', version: '2.1.0' }))
+    const manifest = await collectManifest(home)
+    assert.equal(manifest.profiles.length, 1)
+    const plugins = manifest.profiles[0].plugins
+    assert.deepEqual(plugins.map((p) => p.name), ['demo'], '官方包不该进清单')
+    assert.equal(manifest.profiles[0].bundles.length, 1, 'bundles 里也不该有官方包')
+    assert.equal(summarizeManifest(manifest).total, 1)
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('当前 profile 不在清单里时退回其他 profile 的并集', () => {
+  const manifest = { profiles: [
+    { profile: 'web', plugins: [
+      { name: 'a', kind: 'registry', spec: 'a@1' },
+      { name: 'b', kind: 'git', spec: 'github:o/b' },
+    ] },
+  ] }
+  // 新机器是 desktop，但清单来自一台只用 web 的机器
+  const plan = planInstall(manifest, 'desktop')
+  assert.equal(plan.length, 1)
+  assert.deepEqual(plan[0].add, ['a@1', 'github:o/b'])
+  assert.deepEqual(plan[0].fromProfiles, ['web'])
+})
+
+test('同一插件出现在多个 profile 时只算一次', () => {
+  const manifest = { profiles: [
+    { profile: 'a', plugins: [{ name: 'x', kind: 'git', spec: 'github:o/x' }] },
+    { profile: 'b', plugins: [{ name: 'x', kind: 'git', spec: 'github:o/x' }] },
+  ] }
+  assert.equal(summarizeManifest(manifest).total, 1)
+  assert.equal(summarizeManifest(manifest).git, 1)
 })
 
 // ---------------- 跑 ----------------

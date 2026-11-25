@@ -48,6 +48,21 @@ window.__ModuleLoader__.load({
       scopeStateDesc: '定时任务、工作区列表、脚本',
       scopeSecrets: '密钥',
       scopeSecretsDesc: '.env、.credentials.yaml、各插件登录态 —— 推到公开仓库会泄露，确认仓库是私有的再开',
+      pluginsLabel: '其他插件',
+      pluginsHint: '配置同步不带插件代码本身（node_modules 几百 MB、跨平台不通用）。这里维护一份「装了哪些插件」的清单，跟配置一起进仓库；新机器恢复后点一下就能全装回来。',
+      pluginsExport: '导出插件清单',
+      pluginsExporting: '正在导出…',
+      pluginsInstall: '一键装回全部插件',
+      pluginsInstalling: '正在安装…（可能要几分钟）',
+      pluginsNoManifest: '还没有清单：先点「导出插件清单」，再备份到仓库',
+      pluginsWillInstall: '将安装',
+      pluginsManual: '需要手工安装',
+      pluginsManualWhy: '这些插件推不出可安装的地址（没有 repository 字段），需要你手动装',
+      pluginsDepsMissing: '当前 profile 还没装任何依赖，建议先点「一键装回全部插件」',
+      pluginsRestart: '装完了。重启 DSH 才能加载新插件',
+      pluginsFailed: '这些装失败了',
+      pluginsEmpty: '清单里没有需要安装的插件',
+      pluginsConfirm: '将把这些插件装到当前 profile：',
       scheduleLabel: '定时备份',
       scheduleHint: '到点自动把本机配置推到仓库；只备份，不会自动恢复',
       scheduleOff: '关闭',
@@ -111,6 +126,21 @@ window.__ModuleLoader__.load({
       scopeStateDesc: 'Scheduled tasks, workspace list, scripts',
       scopeSecrets: 'Secrets',
       scopeSecretsDesc: '.env, .credentials.yaml and plugin sign-ins — leaks if the repository is public. Only enable for a private repository',
+      pluginsLabel: 'Other plugins',
+      pluginsHint: 'Configuration sync does not carry plugin code itself (node_modules is hundreds of MB and platform-specific). This keeps a list of “which plugins are installed” next to the configuration; after restoring on a new machine, one click installs them all.',
+      pluginsExport: 'Export plugin list',
+      pluginsExporting: 'Exporting…',
+      pluginsInstall: 'Install all plugins',
+      pluginsInstalling: 'Installing… (may take a few minutes)',
+      pluginsNoManifest: 'No list yet: export it first, then back up',
+      pluginsWillInstall: 'Will install',
+      pluginsManual: 'Install manually',
+      pluginsManualWhy: 'These cannot be resolved to an installable address (no repository field)',
+      pluginsDepsMissing: 'This profile has no installed dependencies yet; install the plugins first',
+      pluginsRestart: 'Done. Restart DSH to load the new plugins',
+      pluginsFailed: 'These failed to install',
+      pluginsEmpty: 'Nothing to install from the list',
+      pluginsConfirm: 'The following plugins will be installed into the current profile:',
       scheduleLabel: 'Scheduled backup',
       scheduleHint: 'Pushes the local configuration to the repository on a schedule; backup only, never restores',
       scheduleOff: 'Off',
@@ -348,6 +378,7 @@ window.__ModuleLoader__.load({
       const [include, setInclude] = React.useState({ core: true, state: true, secrets: false })
       const [extra, setExtra] = React.useState('')
       const [schedule, setSchedule] = React.useState({ mode: 'off', time: '21:00', minutes: 60, weekday: 1 })
+      const [pluginInfo, setPluginInfo] = React.useState(null)
 
       /** 把服务端状态灌进表单；正在编辑时不覆盖用户输入（只灌一次）。 */
       const applyStatus = (next) => {
@@ -372,6 +403,10 @@ window.__ModuleLoader__.load({
           })
           .catch((error) => { if (alive) setLoadError(error.message) })
           .finally(() => { if (alive) setLoading(false) })
+        // 插件清单是独立的一次读：它可能还没有（第一次用），不该拖累配置页。
+        call('/plugins/preview')
+          .then((next) => { if (alive) setPluginInfo(next) })
+          .catch(() => { if (alive) setPluginInfo({ available: false }) })
         return () => { alive = false }
       }, [])
 
@@ -436,6 +471,34 @@ window.__ModuleLoader__.load({
           ? '仓库已经是最新的，没有产生新提交'
           : `已备份：更新 ${summary.uploaded} 个、删除 ${summary.removed} 个、未变 ${summary.unchanged} 个（commit ${String(summary.commit).slice(0, 7)}）`
       })
+
+      const exportPlugins = () => run('export', async () => {
+        const result = await call('/plugins/export', { method: 'POST', body: {} })
+        setPluginInfo(await call('/plugins/preview'))
+        return `已导出 ${result.summary.total} 个插件（registry ${result.summary.registry}、git ${result.summary.git}、无法自动安装 ${result.summary.unresolvable}），下次备份会一起进仓库`
+      })
+
+      const installPlugins = () => {
+        const preview = pluginInfo
+        const list = preview?.add ?? []
+        if (list.length === 0 && (preview?.manual ?? []).length === 0) return Promise.resolve()
+        const shown = list.slice(0, 12).map((spec) => `· ${spec}`).join('\n')
+        const more = list.length > 12 ? `\n…还有 ${list.length - 12} 个` : ''
+        const manual = (preview?.manual ?? []).length > 0
+          ? `\n\n${t('pluginsManualWhy')}：\n${preview.manual.map((item) => `· ${item.name}`).join('\n')}`
+          : ''
+        if (!window.confirm(`${t('pluginsConfirm')}\n\n${shown}${more}${manual}`)) return Promise.resolve()
+        return run('install', async () => {
+          const result = await call('/plugins/install', { method: 'POST', body: {} })
+          setPluginInfo(await call('/plugins/preview'))
+          setDetails({ kind: 'plugins', result })
+          const parts = []
+          if (result.installed.length > 0) parts.push(`已装 ${result.installed.length} 个`)
+          if (result.failed.length > 0) parts.push(`${result.failed.length} 个失败`)
+          if (result.manual.length > 0) parts.push(`${result.manual.length} 个需要手工装`)
+          return `${parts.join('，')}。${t('pluginsRestart')}`
+        })
+      }
 
       const pull = () => {
         if (!window.confirm(t('confirmPull'))) return
@@ -557,6 +620,11 @@ window.__ModuleLoader__.load({
             }))),
 
         h('div', { className: 'dsync-card' },
+          h('div', { className: 'dsync-label' }, t('pluginsLabel')),
+          h('div', { className: 'dsync-hint' }, t('pluginsHint')),
+          h(PluginsPanel, { t, info: pluginInfo, disabled, onExport: exportPlugins, onInstall: installPlugins })),
+
+        h('div', { className: 'dsync-card' },
           h('div', { className: 'dsync-label' }, t('scheduleLabel')),
           h('div', { className: 'dsync-hint' }, t('scheduleHint')),
           h(ScheduleEditor, { t, schedule, setSchedule, disabled, nextRunAt: status?.schedule?.nextRunAt ?? null, lastAuto: status?.schedule?.lastAuto ?? null })),
@@ -577,6 +645,58 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dsync-sep' }),
         h(LastSync, { t, lastSync: status?.config?.lastSync ?? null }),
         h('div', { className: 'dsync-hint' }, t('restoreHint')))
+    }
+
+    /**
+     * 插件清单面板：导出清单 / 一键装回。
+     *
+     * 装回是**独立的一步**，不并进「从仓库恢复」：恢复配置本身不该顺手往系统里
+     * 装代码。用户看到清单、确认了，再装。
+     */
+    function PluginsPanel({ t, info, disabled, onExport, onInstall }) {
+      const add = info?.add ?? []
+      const manual = info?.manual ?? []
+      const available = info?.available === true
+      const canInstall = available && add.length > 0
+
+      return h('div', { className: 'dsync-sched' },
+        !available
+          ? h('div', { className: 'dsync-hint' },
+              info === null ? '…' : (info.message ?? t('pluginsNoManifest')))
+          : h('div', { className: 'dsync-sched-next' },
+              `${t('scheduleNext')} ${add.length} 个 · ${info.profile} · ${
+                info.generatedAt ? formatLocal(info.generatedAt) : ''
+              }`),
+        available && Array.isArray(info.fromProfiles) && info.fromProfiles.length > 0
+          ? h('div', { className: 'dsync-sched-next' },
+              `清单里没有 ${info.profile}，用的是这些 profile 的并集：${info.fromProfiles.join('、')}`)
+          : null,
+
+        available && info.depsReady === false
+          ? h('div', { className: 'dsync-sched-next dsync-warn' }, t('pluginsDepsMissing'))
+          : null,
+
+        available && add.length > 0
+          ? h('div', null,
+              h('div', { className: 'dsync-hint' }, `${t('pluginsWillInstall')}（${add.length}）`),
+              h('ul', { className: 'dsync-list' },
+                add.slice(0, 12).map((spec) => h('li', { key: spec, className: 'dsync-mono' }, spec)),
+                add.length > 12 ? h('li', { key: '__pm' }, `…还有 ${add.length - 12} 个`) : null))
+          : null,
+
+        available && manual.length > 0
+          ? h('div', null,
+              h('div', { className: 'dsync-label dsync-warn' }, `${t('pluginsManual')}（${manual.length}）`),
+              h('div', { className: 'dsync-hint' }, t('pluginsManualWhy')),
+              h('ul', { className: 'dsync-list' },
+                manual.slice(0, 12).map((item) => h('li', { key: item.name, className: 'dsync-mono' }, item.name))))
+          : null,
+
+        h('div', { className: 'dsync-actions' },
+          h('button', { className: 'dsync-btn', disabled, onClick: onExport },
+            disabled && false ? t('pluginsExporting') : t('pluginsExport')),
+          h('button', { className: 'dsync-btn dsync-btn-primary', disabled: disabled || !canInstall, onClick: onInstall },
+            t('pluginsInstall'))))
     }
 
     /** 星期几：值是 1..7（周一..周日）。 */

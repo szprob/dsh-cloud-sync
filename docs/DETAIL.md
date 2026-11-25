@@ -65,7 +65,87 @@ DSH 把一切都放在 `~/.dsh` 下。它的大小分布大致是：
 
 一个坑：镜像工作区是**跨分支复用的**。切到一个远端还不存在的分支时，如果不先清空工作区，上一次同步留下的文件会被当成「这个分支的现状」读出来。所以 `prepare()` 在新建孤儿分支前会 `rm -r .` + `clean -ffd`。
 
-## 3. 定时备份
+## 3. 其他插件
+
+### 为什么不同步 node_modules
+
+`~/.dsh/profiles/*/node_modules` 有几百 MB，含 `node-pty` 这种平台相关的原生模块。同步它意味着：
+
+- 每次备份传几百 MB
+- macOS 的产物拿到 Windows 上直接不能用
+- 二进制文件进 git 历史，仓库永久膨胀
+
+要带走的不是「装好的东西」，是「装什么」。所以同步的是一份**插件清单**（`cloud-sync/plugins.json`，几 KB），新机器照着装。
+
+### 清单里的三种形态
+
+`describeDependency(name, recorded, manifest)` 是核心：
+
+**registry**：`recorded` 是 `^4.18.7` 这种范围。照抄范围会有问题 —— 新机器装的时候 registry 上可能已经是最新的 5.0.0，一个破坏性更新就让恢复出来的环境起不来。所以清单里**钉死实际装到的版本**（从 `node_modules/<name>/package.json` 读 `version`）：
+
+```
+^4.18.7  →  dsh-connect-trae@4.18.7
+```
+
+读不到已装 manifest 时才退回记录值，但**仍然要拼上包名** —— 只写 `^4.18.7` 会被 pnpm 当成一个叫 `^4.18.7` 的包去 registry 找，必然 404。这个 bug 在真的跑一遍之前完全看不出来。
+
+**git**：`recorded` 是 `link:/Users/...`，本机路径，跨机器无意义。从包自己的 `repository` 字段反推：
+
+```
+link:/Users/me/git/dsh-plugins/packages/eye-care
+  + repository: { url: 'git+https://github.com/szprob/dsh-plugins.git',
+                  directory: 'packages/eye-care' }
+  →  github:szprob/dsh-plugins#path:/packages/eye-care
+```
+
+`repository.directory` 就是 monorepo 的子目录，直接拼进 `#path:`。
+
+为什么不直接抄 `link:`：实测 pnpm 对一个不存在的 `link:` 目标只打一行警告
+
+```
+[WARN] Installing a dependency from a non-existent directory: /nonexistent/x
++ x 0.0.0 <- ...
+```
+
+**装了一个 0.0.0 的空包，退出码 0。** 不报错、不失败，但插件是坏的 —— 这是最糟的失败方式，因为它假装成功。
+
+**unresolvable**：没有 `repository` 字段，或者不是 GitHub。这类**绝不硬装**，单独列出来让人手工处理。装个空包比不装更糟：至少「没装」这件事是可见的。
+
+### 官方包不进清单
+
+`@deepseek-ai/*` 由 DSH 自带。记进去会在新机器上装出第二份，两份同名包同时存在会导致 service 重复注册。
+
+### pnpm 从哪来
+
+`locatePnpm()` 按优先级找：
+
+1. **桌面端自带的**：`<app>/Contents/Resources/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.cjs`，用同目录的 `node` 跑。这个最可靠 —— 版本和宿主对齐，用户不需要自己装 pnpm。
+2. 宿主配的 `pnpmCommand`（和 `plugin-manager` 用的是同一个配置项）。
+3. PATH 上的 `pnpm`。
+
+从 `$DSH_INSTALL_DIR` 往上找 `runtime/primary-runtime/dependencies`，最多走 8 层。找不到就抛 `NO_PNPM` 并给出该装什么。
+
+为什么不用 shell 让用户自己跑：profile 的 `pnpm-workspace.yaml` 里有 `nodeLinker: hoisted`，只有在这个目录下跑才对；换个 cwd 就是另一套行为。
+
+### 装的过程
+
+一条一条 `pnpm add <spec> --save-exact`，最后 `pnpm install` 收尾：
+
+- 一条失败不影响其余的（用户至少能拿到大部分插件）
+- 失败项带名字报出来，不是一句「安装失败」
+- `--save-exact` 让 `package.json` 里写的是精确版本
+
+### profile 名对不上怎么办
+
+清单来自老机器，profile 名可能是 `web` 而新机器是 `desktop`。`planInstall(manifest, onlyProfile)` 找不到当前 profile 时，**退回所有 profile 的并集**：装回老机器上装过的那批，比什么都不装更接近用户预期。装多了顶多是几个用不到的包。
+
+结果里带 `fromProfiles`，界面会说明「清单里没有 desktop，用的是这些 profile 的并集」。
+
+### 装完要重启
+
+插件是宿主进程启动时 import 的。新装进 `node_modules` 的包在下次启动前不会被加载。界面上的提示是「装完了。重启 DSH 才能加载新插件」—— 不替用户重启，那会把正在跑的东西全打断。
+
+## 4. 定时备份
 
 ### 三种周期，没有 cron
 
@@ -128,7 +208,7 @@ ctx.effect(() => {
 
 失败记在 `lastAutoResult`（只在内存里，重启即清空），界面上显示「上次自动备份失败：时间 — 原因」。没有做成持久化，是因为它描述的是「本次运行期间最后一次自动备份」，跨重启的历史没有意义 —— 真要查历史，`~/.dsh/cloud-sync/last-sync.json` 里有完整的最近一次同步摘要。
 
-## 4. 出错怎么办
+## 5. 出错怎么办
 
 ### 常见错误
 
@@ -155,7 +235,7 @@ ctx.effect(() => {
 
 同一时间只允许一个同步任务。如果界面一直显示「进行中」但其实没有请求在跑（比如页面关掉时正好在同步），重启 DSH 即可 —— 运行状态在内存里，不落盘。
 
-## 5. 刻意的限制
+## 6. 刻意的限制
 
 **不做三方合并。** 两台机器都改过同一个文件时，恢复会用仓库版本整份覆盖本机。配置文件逐行合并看起来很美，实际上没法判断「这行为什么这么写」，不如让人自己决定。备份兜底。
 
@@ -169,7 +249,7 @@ ctx.effect(() => {
 
 **不做定时同步。** 配置改动不频繁，自动同步带来的「哪次覆盖了哪次」的困惑远大于便利。要定时，可以用 DSH 自己的定时任务功能让模型调用 `cloud_sync_backup`。
 
-## 6. 数据在哪
+## 7. 数据在哪
 
 | 文件 | 内容 | 权限 |
 |---|---|---|
@@ -183,7 +263,7 @@ token 正常情况下存在 DSH 的凭据记录里（key: `dsh-cloud-sync/github
 
 `config.json` 会参与同步 —— 它本身是配置，也不含密钥。`last-sync.json` 和 `backups/` 不参与同步（在跳过名单里）。
 
-## 7. HTTP 路由
+## 8. HTTP 路由
 
 浏览器半边通过宿主 HTTP 服务调用：
 
@@ -197,6 +277,9 @@ token 正常情况下存在 DSH 的凭据记录里（key: `dsh-cloud-sync/github
 | POST | `/plugins/dsh-cloud-sync/push` | 备份 |
 | POST | `/plugins/dsh-cloud-sync/pull` | 恢复 |
 | POST | `/plugins/dsh-cloud-sync/restore` | 校验 + 恢复 |
+| POST | `/plugins/dsh-cloud-sync/plugins/export` | 导出插件清单 |
+| GET | `/plugins/dsh-cloud-sync/plugins/preview` | 看会装什么 |
+| POST | `/plugins/dsh-cloud-sync/plugins/install` | 按清单装回 |
 
 `POST /config` 的 `schedule` 字段会做校验：`mode` 只接受四个枚举值，`time` 必须是 `HH:MM`（允许一位数），`minutes` 必须是数字，`weekday` 必须在 1..7。越界值在 `normalizeSchedule` 里夹回合法范围，非法枚举回落到 `off`。
 
