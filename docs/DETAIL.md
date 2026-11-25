@@ -11,7 +11,7 @@ DSH 把一切都放在 `~/.dsh` 下。它的大小分布大致是：
 | `sessions/` | 几十 MB ~ 几百 MB | ❌ 会话记录，只属于这台机器 |
 | `attachments/` | 几十 MB | ❌ 附件图片 |
 | `storages/session_projcache/` | 几十 MB | ❌ 会话投影缓存，可重建 |
-| `workbuddy-vault/` | 视插件 | ❌ 第三方插件的私有数据 |
+| `workbuddy-vault/` | 几十 KB | ⚠️ 第三方插件的明文凭据（5 个账号），归密钥类 |
 | `dsh-runtimes/` | 几百 MB | ❌ 运行时 |
 | `profiles/*/node_modules/` | 几百 MB | ❌ 依赖 |
 | **`cordis.patch.yml`** | 几 KB | ✅ |
@@ -21,6 +21,30 @@ DSH 把一切都放在 `~/.dsh` 下。它的大小分布大致是：
 | `.env` / `.credentials.yaml` / `.<插件>.json` | 几 KB | ⚠️ 密钥，默认关 |
 
 结论：真正该带走的是**几 KB 到几十 KB 的配置**，其余全是机器本地状态。所以默认只同步配置和使用状态。
+
+### 各插件的数据存在哪
+
+这台机器上的第三方插件（Trae / WorkBuddy / Qoder）都把状态写在 `~/.dsh` **根目录下的隐藏 JSON**，命名很规整：
+
+| 文件 | 内容 |
+|---|---|
+| `.trae-auth.cn.json` | Trae 登录凭据（accessToken + refreshToken） |
+| `.trae-pool.cn.json` / `.trae-auto-checkin.cn.json` | 账号池、签到进度 |
+| `.workbuddy-vault/` | **WorkBuddy 的明文凭据仓库**，每个账号一个文件，含 refreshToken |
+| `.workbuddy-pool.*.json` | 账号池探测结果 |
+| `.workbuddy-daydone-*.json` | 每日任务进度 |
+| `.qoder-accounts.*.json` | Qoder 的 PAT 账号列表 |
+| `.qoder-pool.*.json` | 账号池与积分 |
+
+所有这些都被归到**密钥类**，跟着「密钥」开关走。之前 `workbuddy-vault/` 被我放进了「永远不同步」，那是个错误 —— 它和那些 `.workbuddy-*.json` 是同一类东西（账号凭据），区别只是目录 vs 文件。放进永远跳过等于让用户以为它被处理了，其实只是没给选择。
+
+插件的**功能配置**（模型选择、开关、区域设置）在 `profiles/<name>/cordis.patch.yml` 里，属于配置类。这台机器上它们占 82 KB：
+
+```
+dsh-connect-trae        23 KB
+dsh-connect-workbuddy   41 KB
+dsh-connect-qoder       17 KB
+```
 
 ### 三类开关
 

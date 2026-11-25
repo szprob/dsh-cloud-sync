@@ -112,10 +112,10 @@ dsh: skipping profile bundle "dsh-eye-care": cannot resolve profile bundle...
 |---|:---:|---|
 | **配置** | ✅ | `cordis.patch.yml`、各 profile 的 `cordis.patch.yml` / `cordis.yml` / `package.json` / `pnpm-workspace.yaml` / `pnpm-lock.yaml` |
 | **应用状态** | ✅ | `storages/*.json`（工作区列表、定时任务）、`automation/state.json`、`scripts/*`、本插件自己的配置 |
-| **密钥** | ❌ | `.env`、`.credentials.yaml`、各插件的登录态（`.trae-auth.cn.json` 这类） |
+| **密钥** | ❌ | `.env`、`.credentials.yaml`、各插件的登录态与账号池（`.trae-auth.cn.json`、`.workbuddy-pool.cn.json` 这类）、`workbuddy-vault/` |
 | **额外路径** | — | 自己填，一行一个，相对 `~/.dsh`。只接受这个目录里的文件 |
 
-**永远不同步**：`sessions/`（会话记录，几十上百 MB）、`attachments/`、`storages/session_projcache/`、`workbuddy-vault/`、`node_modules/`、`cloud-sync/backups/`、`*.log`、符号链接（`skills/` 就是指向 git 仓库的链接，跟进去会把整个技能库拖进来）。
+**永远不同步**：`sessions/`（会话记录，几十上百 MB）、`attachments/`、`storages/session_projcache/`、`dsh-runtimes/`（310 MB 运行时）、`node_modules/`、`cloud-sync/backups/`、`*.log`、符号链接（`skills/` 就是指向 git 仓库的链接，跟进去会把整个技能库拖进来）。
 
 ### 关于密钥
 
@@ -178,6 +178,8 @@ dsh/
 - **恢复后要重启**。DSH 在启动时读配置，热重载覆盖不到所有项。
 - **token 存在 DSH 的凭据记录里**（`ctx.credentials` 的 `dsh-cloud-sync/github` 记录），不写在配置文件中。凭据服务缺席时才退回 `~/.dsh/cloud-sync/token.json`（0600）。
 - **桌面端与 CLI 的 profile 不通用**：桌面端用 `desktop` profile。如果你同时用 CLI 的 `web` / `headless`，它们的 profile 补丁也会一起同步（都在 `profiles/` 下）。
+- **浏览器里的偏好不在同步范围**：护眼模式的开关、对话宽度这类存在浏览器 `localStorage`（在 `~/Library/Application Support/@deepseek-ai/dsh-desktop/Local Storage`），那是 Electron 的站点数据，不是 DSH 的配置。换机器后会回到默认值，重新点一下就行。
+- **`dsh-runtimes/` 不参与同步**：310 MB 的运行时（node / pnpm / python），DSH 首次启动会自己补。
 
 ## 开发
 

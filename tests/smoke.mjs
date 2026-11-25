@@ -74,6 +74,15 @@ test('三类路径各自归位', () => {
   assert.equal(categoryOf('.trae-auth.cn.json'), 'secrets')
 })
 
+test('workbuddy-vault 归密钥类，不是永远跳过', () => {
+  // 这五个文件里是 5 个账号的明文 refreshToken：跟着「密钥」开关走，
+  // 放进「永远不同步」等于让用户以为它被跳过了、其实只是没给选择。
+  for (const path of ['workbuddy-vault', 'workbuddy-vault/cn/a.json', 'workbuddy-vault/global/b.json']) {
+    assert.equal(categoryOf(path), 'secrets', `${path} 应归密钥类`)
+    assert.equal(skipped(path), false, `${path} 不该被无条件跳过`)
+  }
+})
+
 test('永不进同步的路径', () => {
   for (const path of ['sessions/x/y', 'attachments/a.png', 'storages/session_projcache/s.json',
     'profiles/desktop/node_modules/x/index.js', 'cloud-sync/backups/a/b', '.DS_Store', 'a/b.log']) {
