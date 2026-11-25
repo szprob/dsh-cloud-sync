@@ -1,0 +1,6 @@
+# 云同步：在「设置 → 云同步」里配好 GitHub token 与仓库，就能把 ~/.dsh 下的配置
+# 备份进仓库 / 从仓库拉回本机。设置存在 ~/.dsh/cloud-sync/config.json（0600），
+# 不走插件 Config —— token 是密钥，不该进 cordis.patch.yml。
+- insert:
+    - id: dsh-cloud-sync
+      name: 'dsh-cloud-sync'

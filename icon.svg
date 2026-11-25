@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Cloud sync">
+  <defs>
+    <linearGradient id="dsyncCloud" x1="16" y1="20" x2="48" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7aa7ff"/>
+      <stop offset="1" stop-color="#3b6fd4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 云 -->
+  <path d="M22 41a9 9 0 0 1-.6-17.98A12.5 12.5 0 0 1 45.6 25.4 8 8 0 0 1 44.6 41H22Z"
+        fill="url(#dsyncCloud)"/>
+
+  <!-- 上行箭头 -->
+  <path d="M32 57V45.5" stroke="#f4f7ff" stroke-width="4" stroke-linecap="round"/>
+  <path d="M26 51l6-6 6 6" fill="none" stroke="#f4f7ff" stroke-width="4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 下行箭头：换机器的另一条方向 -->
+  <path d="M32 7v11.5" stroke="#3b6fd4" stroke-width="4" stroke-linecap="round" opacity="0.65"/>
+  <path d="M26 13l6 6 6-6" fill="none" stroke="#3b6fd4" stroke-width="4"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.65"/>
+</svg>
