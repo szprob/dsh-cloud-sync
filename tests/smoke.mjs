@@ -247,6 +247,12 @@ test('归一化只认三种周期，越界值夹回范围', () => {
   assert.equal(normalizeSchedule({ mode: 'weekly', weekday: 9 }).weekday, 1)
 })
 
+test('非法时刻不会被静默接受', () => {
+  // normalizeTime 返回 undefined，normalizeSchedule 回落到默认 —— API 层另有显式拒绝。
+  assert.equal(normalizeSchedule({ mode: 'daily', time: '25:00' }).time, '21:00')
+  assert.equal(normalizeSchedule({ mode: 'daily', time: '21:60' }).time, '21:00')
+})
+
 test('daily：今天没到就今天，过了就明天', () => {
   const now = new Date('2026-11-25T11:05:00+08:00')
   assert.equal(

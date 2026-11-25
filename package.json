@@ -1,6 +1,6 @@
 {
   "name": "dsh-cloud-sync",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "把 DeepSeek Harness 的配置同步到你自己的 GitHub 仓库：配好 token 与 repo 后一键备份 / 一键恢复，新机器装插件就能拉回全套配置。",
   "type": "module",
   "exports": {
