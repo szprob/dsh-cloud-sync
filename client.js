@@ -573,6 +573,13 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dsync-card dsync-status' },
         h('div', { className: 'dsync-mono' }, summary.commit ? `commit ${String(summary.commit).slice(0, 7)}` : '（无新提交）'),
         summary.backupDir ? h('div', null, `备份目录 ${summary.backupDir}`) : null,
+        Array.isArray(summary.linkedDeps) && summary.linkedDeps.length > 0
+          ? h('div', { className: 'dsync-warn' },
+              `以下插件在本机是 link 安装，恢复后路径不存在，需要重新安装或改成本机路径：`,
+              h('ul', { className: 'dsync-list' },
+                summary.linkedDeps.map((item) => h('li', { key: `${item.profile}/${item.package}` },
+                  `${item.package}（${item.profile}）→ ${item.target}`))))
+          : null,
         Array.isArray(summary.skipped) && summary.skipped.length > 0
           ? h('ul', { className: 'dsync-list' },
               summary.skipped.slice(0, 10).map((item) => h('li', { key: item.path }, `${item.path} — ${item.reason}`)))
