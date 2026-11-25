@@ -37,5 +37,18 @@ export function apply(ctx) {
     scope.effect(() => registerTools(scope, service), 'cloud-sync: agent tools')
   })
 
+  /**
+   * 定时备份。
+   *
+   * 放在 `ctx.effect` 里启动：插件卸载 / 重新加载时自动停掉定时器，不会留下
+   * 一个「插件已经关了但还在偷偷 push」的幽灵。
+   */
+  ctx.effect(() => {
+    service.startScheduler().catch((error) => {
+      ctx.logger?.warn?.('cloud-sync: 定时备份启动失败', error)
+    })
+    return () => { service.stopScheduler() }
+  }, 'cloud-sync: scheduled backup')
+
   ctx.logger?.info?.('dsh-cloud-sync 已加载：/plugins/dsh-cloud-sync')
 }

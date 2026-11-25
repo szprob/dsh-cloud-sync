@@ -23,6 +23,9 @@ import {
   skipped,
 } from '../lib/sync.js'
 import { normalizeConfig, normalizeRepoPath, DEFAULT_INCLUDE } from '../lib/config.js'
+import {
+  computeNextRun, defaultSchedule, describeSchedule, normalizeSchedule, ScheduleRunner,
+} from '../lib/schedule.js'
 
 const tests = []
 const test = (name, fn) => tests.push({ name, fn })
@@ -230,6 +233,122 @@ test('pullPlan 只写 DSH 目录内、会跳过的路径不写，覆盖前备份
     await rm(home, { recursive: true, force: true })
     await rm(backupRoot, { recursive: true, force: true })
   }
+})
+
+// ---------------- 定时备份 ----------------
+
+test('归一化只认三种周期，越界值夹回范围', () => {
+  assert.equal(normalizeSchedule(undefined).mode, 'off')
+  assert.equal(normalizeSchedule({ mode: 'cron' }).mode, 'off', '未知周期必须回落到关闭')
+  assert.equal(normalizeSchedule({ mode: 'interval', minutes: 0 }).minutes, 1)
+  assert.equal(normalizeSchedule({ mode: 'interval', minutes: 999999 }).minutes, 10080)
+  assert.equal(normalizeSchedule({ mode: 'daily', time: '25:00' }).time, '21:00', '非法时刻回默认')
+  assert.equal(normalizeSchedule({ mode: 'daily', time: '9:5' }).time, '09:05', '补零')
+  assert.equal(normalizeSchedule({ mode: 'weekly', weekday: 9 }).weekday, 1)
+})
+
+test('daily：今天没到就今天，过了就明天', () => {
+  const now = new Date('2026-11-25T11:05:00+08:00')
+  assert.equal(
+    computeNextRun({ mode: 'daily', time: '21:00' }, now).toISOString(),
+    new Date('2026-11-25T21:00:00+08:00').toISOString(),
+  )
+  assert.equal(
+    computeNextRun({ mode: 'daily', time: '09:00' }, now).toISOString(),
+    new Date('2026-11-26T09:00:00+08:00').toISOString(),
+  )
+})
+
+test('interval：从现在起算 N 分钟', () => {
+  const now = new Date('2026-11-25T11:05:00+08:00')
+  assert.equal(
+    computeNextRun({ mode: 'interval', minutes: 30 }, now).toISOString(),
+    new Date('2026-11-25T11:35:00+08:00').toISOString(),
+  )
+})
+
+test('weekly：同日未到是今天，已过就顺延一周', () => {
+  const wednesday = new Date('2026-11-25T11:05:00+08:00') // 周三
+  assert.equal(
+    computeNextRun({ mode: 'weekly', weekday: 3, time: '21:00' }, wednesday).toISOString(),
+    new Date('2026-11-25T21:00:00+08:00').toISOString(),
+  )
+  assert.equal(
+    computeNextRun({ mode: 'weekly', weekday: 3, time: '09:00' }, wednesday).toISOString(),
+    new Date('2026-12-02T09:00:00+08:00').toISOString(),
+  )
+  assert.equal(
+    computeNextRun({ mode: 'weekly', weekday: 1, time: '21:00' }, wednesday).toISOString(),
+    new Date('2026-11-30T21:00:00+08:00').toISOString(),
+  )
+  // 周日是 7，Date 里是 0：这条最容易写错
+  assert.equal(
+    computeNextRun({ mode: 'weekly', weekday: 7, time: '21:00' }, wednesday).toISOString(),
+    new Date('2026-11-29T21:00:00+08:00').toISOString(),
+  )
+})
+
+test('off 永远不排期', () => {
+  assert.equal(computeNextRun({ mode: 'off' }, new Date()), undefined)
+})
+
+test('describeSchedule 三种周期都说人话', () => {
+  assert.equal(describeSchedule({ mode: 'off' }), '关闭')
+  assert.equal(describeSchedule({ mode: 'daily', time: '21:00' }), '每天 21:00')
+  assert.equal(describeSchedule({ mode: 'interval', minutes: 30 }), '每隔 30 分钟')
+  assert.equal(describeSchedule({ mode: 'weekly', weekday: 1, time: '21:00' }), '每周一 21:00')
+  assert.equal(describeSchedule({ mode: 'weekly', weekday: 7, time: '09:30' }), '每周日 09:30')
+})
+
+test('ScheduleRunner 到点跑一次并重排；off 时不排', async () => {
+  let now = new Date('2026-11-25T11:00:00+08:00')
+  const clock = { get: () => now }
+  let runs = 0
+  let config = { mode: 'interval', minutes: 30 }
+  const runner = new ScheduleRunner({
+    getSchedule: () => config,
+    run: async () => { runs += 1 },
+    logger: { warn() {} },
+    now: () => clock.get(),
+  })
+
+  const first = runner.arm()
+  assert.equal(first.toISOString(), new Date('2026-11-25T11:30:00+08:00').toISOString())
+  assert.ok(runner.nextRunAt, '排期后应有 nextRunAt')
+
+  // 直接调 fire 模拟到点：不该依赖真实等待
+  now = new Date('2026-11-25T11:30:00+08:00')
+  await runner.fire()
+  assert.equal(runs, 1)
+  assert.equal(
+    runner.nextRunAt.toISOString(),
+    new Date('2026-11-25T12:00:00+08:00').toISOString(),
+    '跑完应从结束时刻重排下一次',
+  )
+
+  // 关掉后不该再排
+  config = { mode: 'off' }
+  assert.equal(runner.arm(), undefined)
+  assert.equal(runner.nextRunAt, undefined)
+  runner.stop()
+})
+
+test('ScheduleRunner 里 run 抛错不会打死循环，仍会排下一次', async () => {
+  const now = new Date('2026-11-25T11:00:00+08:00')
+  let runs = 0
+  const warned = []
+  const runner = new ScheduleRunner({
+    getSchedule: () => ({ mode: 'interval', minutes: 10 }),
+    run: async () => { runs += 1; throw new Error('网络炸了') },
+    logger: { warn: (...args) => warned.push(args) },
+    now: () => now,
+  })
+  runner.arm()
+  await runner.fire()
+  assert.equal(runs, 1)
+  assert.ok(warned.length > 0, '失败应记日志')
+  assert.ok(runner.nextRunAt, '失败后仍要排下一次，否则一次网络抖动就永久停摆')
+  runner.stop()
 })
 
 // ---------------- 跑 ----------------

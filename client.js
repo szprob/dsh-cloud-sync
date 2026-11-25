@@ -48,6 +48,16 @@ window.__ModuleLoader__.load({
       scopeStateDesc: '定时任务、工作区列表、脚本',
       scopeSecrets: '密钥',
       scopeSecretsDesc: '.env、.credentials.yaml、各插件登录态 —— 推到公开仓库会泄露，确认仓库是私有的再开',
+      scheduleLabel: '定时备份',
+      scheduleHint: '到点自动把本机配置推到仓库；只备份，不会自动恢复',
+      scheduleOff: '关闭',
+      scheduleDaily: '每天',
+      scheduleInterval: '每隔',
+      scheduleWeekly: '每周',
+      scheduleMinutes: '分钟',
+      scheduleNext: '下次',
+      scheduleLastAuto: '上次自动备份',
+      scheduleFailed: '上次自动备份失败',
       extraLabel: '额外路径',
       extraHint: '要一起同步的其它文件，一行一个，相对 ~/.dsh（只支持这个目录里的文件）',
       save: '保存',
@@ -101,6 +111,16 @@ window.__ModuleLoader__.load({
       scopeStateDesc: 'Scheduled tasks, workspace list, scripts',
       scopeSecrets: 'Secrets',
       scopeSecretsDesc: '.env, .credentials.yaml and plugin sign-ins — leaks if the repository is public. Only enable for a private repository',
+      scheduleLabel: 'Scheduled backup',
+      scheduleHint: 'Pushes the local configuration to the repository on a schedule; backup only, never restores',
+      scheduleOff: 'Off',
+      scheduleDaily: 'Daily at',
+      scheduleInterval: 'Every',
+      scheduleWeekly: 'Weekly on',
+      scheduleMinutes: 'minutes',
+      scheduleNext: 'Next',
+      scheduleLastAuto: 'Last automatic backup',
+      scheduleFailed: 'Last automatic backup failed',
       extraLabel: 'Extra paths',
       extraHint: 'Other files to sync, one per line, relative to ~/.dsh (only files inside it)',
       save: 'Save',
@@ -158,6 +178,23 @@ window.__ModuleLoader__.load({
 .dsync-check-desc { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 .dsync-warn { color: var(--dsw-alias-state-warn-label); }
 .dsync-seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.dsync-sched { display: flex; flex-direction: column; gap: 10px; }
+.dsync-sched-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dsync-sched-row .dsync-input { width: auto; min-width: 88px; }
+.dsync-sched-unit { font-size: 13px; color: var(--dsw-alias-label-secondary); }
+.dsync-sched-next {
+  font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.dsync-select {
+  box-sizing: border-box; height: 32px; padding: 0 8px; font: inherit; font-size: 13px;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px;
+}
+.dsync-select:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary));
+  outline-offset: 1px;
+}
 .dsync-seg-btn {
   appearance: none; font: inherit; font-size: 12px; line-height: 18px;
   padding: 5px 12px; border-radius: 8px; cursor: pointer;
@@ -310,6 +347,7 @@ window.__ModuleLoader__.load({
       const [token, setToken] = React.useState('')
       const [include, setInclude] = React.useState({ core: true, state: true, secrets: false })
       const [extra, setExtra] = React.useState('')
+      const [schedule, setSchedule] = React.useState({ mode: 'off', time: '21:00', minutes: 60, weekday: 1 })
 
       /** 把服务端状态灌进表单；正在编辑时不覆盖用户输入（只灌一次）。 */
       const applyStatus = (next) => {
@@ -321,6 +359,7 @@ window.__ModuleLoader__.load({
         setPath(next.config.path)
         setInclude({ core: true, state: true, secrets: false, ...next.config.include })
         setExtra((next.config.extraPaths ?? []).join('\n'))
+        setSchedule({ mode: 'off', time: '21:00', minutes: 60, weekday: 1, ...(next.config.schedule ?? {}) })
       }
 
       React.useEffect(() => {
@@ -363,6 +402,7 @@ window.__ModuleLoader__.load({
             path,
             include,
             extraPaths: extra.split('\n').map((line) => line.trim()).filter((line) => line !== ''),
+            schedule,
           },
         })
         if (token.trim() !== '') {
@@ -516,6 +556,11 @@ window.__ModuleLoader__.load({
               onChange: (event) => setExtra(event.target.value),
             }))),
 
+        h('div', { className: 'dsync-card' },
+          h('div', { className: 'dsync-label' }, t('scheduleLabel')),
+          h('div', { className: 'dsync-hint' }, t('scheduleHint')),
+          h(ScheduleEditor, { t, schedule, setSchedule, disabled, nextRunAt: status?.schedule?.nextRunAt ?? null, lastAuto: status?.schedule?.lastAuto ?? null })),
+
         h('div', { className: 'dsync-actions' },
           h('button', { className: 'dsync-btn dsync-btn-primary', disabled, onClick: save }, busy === 'save' ? t('saving') : t('save')),
           h('button', { className: 'dsync-btn', disabled, onClick: test }, busy === 'test' ? t('testing') : t('test')),
@@ -532,6 +577,100 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dsync-sep' }),
         h(LastSync, { t, lastSync: status?.config?.lastSync ?? null }),
         h('div', { className: 'dsync-hint' }, t('restoreHint')))
+    }
+
+    /** 星期几：值是 1..7（周一..周日）。 */
+    const WEEKDAYS = [
+      { value: 1, zh: '周一', en: 'Monday' },
+      { value: 2, zh: '周二', en: 'Tuesday' },
+      { value: 3, zh: '周三', en: 'Wednesday' },
+      { value: 4, zh: '周四', en: 'Thursday' },
+      { value: 5, zh: '周五', en: 'Friday' },
+      { value: 6, zh: '周六', en: 'Saturday' },
+      { value: 7, zh: '周日', en: 'Sunday' },
+    ]
+
+    /** 把 ISO 时间格式化成本地「YYYY-MM-DD HH:MM」，界面上比 ISO 好读。 */
+    function formatLocal(iso) {
+      if (typeof iso !== 'string' || iso === '') return ''
+      const date = new Date(iso)
+      if (Number.isNaN(date.getTime())) return ''
+      const pad = (value) => String(value).padStart(2, '0')
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+    }
+
+    /**
+     * 定时备份的编辑区。
+     *
+     * 三种周期各自只显示自己需要的字段，切换时保留另外两种的已填值 ——
+     * 用户在同一套配置上来回比较「每天 21 点」和「每周一 21 点」是常事。
+     */
+    function ScheduleEditor({ t, schedule, setSchedule, disabled, nextRunAt, lastAuto }) {
+      const mode = schedule.mode ?? 'off'
+      const patch = (next) => setSchedule((prev) => ({ ...prev, ...next }))
+      const modeButton = (value, label) => h('button', {
+        type: 'button',
+        className: 'dsync-seg-btn',
+        'aria-pressed': mode === value,
+        disabled,
+        onClick: () => patch({ mode: value }),
+      }, label)
+
+      const weekdayLabel = (day) => (t('scheduleWeekly') === 'Weekly on' ? day.en : day.zh)
+
+      return h('div', { className: 'dsync-sched' },
+        h('div', { className: 'dsync-seg' },
+          modeButton('off', t('scheduleOff')),
+          modeButton('daily', t('scheduleDaily')),
+          modeButton('interval', t('scheduleInterval')),
+          modeButton('weekly', t('scheduleWeekly'))),
+
+        mode === 'daily' || mode === 'weekly'
+          ? h('div', { className: 'dsync-sched-row' },
+              mode === 'weekly'
+                ? h('select', {
+                    className: 'dsync-select',
+                    value: String(schedule.weekday ?? 1),
+                    disabled,
+                    onChange: (event) => patch({ weekday: Number(event.target.value) }),
+                  }, WEEKDAYS.map((day) => h('option', { key: day.value, value: String(day.value) }, weekdayLabel(day))))
+                : null,
+              h('input', {
+                className: 'dsync-input',
+                type: 'time',
+                value: schedule.time ?? '21:00',
+                disabled,
+                onChange: (event) => patch({ time: event.target.value }),
+              }))
+          : null,
+
+        mode === 'interval'
+          ? h('div', { className: 'dsync-sched-row' },
+              h('input', {
+                className: 'dsync-input',
+                type: 'number',
+                min: 1,
+                max: 10080,
+                value: String(schedule.minutes ?? 60),
+                disabled,
+                onChange: (event) => {
+                  const value = Number(event.target.value)
+                  patch({ minutes: Number.isFinite(value) && value > 0 ? Math.round(value) : 1 })
+                },
+              }),
+              h('span', { className: 'dsync-sched-unit' }, t('scheduleMinutes')))
+          : null,
+
+        nextRunAt !== null && nextRunAt !== undefined
+          ? h('div', { className: 'dsync-sched-next' }, `${t('scheduleNext')}: ${formatLocal(nextRunAt)}`)
+          : null,
+
+        lastAuto !== null && lastAuto !== undefined
+          ? h('div', { className: lastAuto.ok === false ? 'dsync-sched-next dsync-err' : 'dsync-sched-next' },
+              lastAuto.ok === false
+                ? `${t('scheduleFailed')}: ${formatLocal(lastAuto.at)} — ${lastAuto.message ?? ''}`
+                : `${t('scheduleLastAuto')}: ${formatLocal(lastAuto.at)}`)
+          : null)
     }
 
     /** 操作的详细信息：测试结果、差异列表、跳过项。 */

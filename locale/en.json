@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Cloud sync",
-    "description": "Syncs your DSH configuration to your own GitHub repository: fill in a token and repository, then back up with one click and restore with one click. A new machine only needs this plugin installed with the same repository and token to pull the whole configuration back. What gets synced is split into Configuration, Application state, and Secrets, with Secrets behind its own switch and off by default. The folder inside the repository is configurable; only that subfolder is read or written, never the rest of the repository.",
+    "description": "Syncs your DSH configuration to your own GitHub repository: back up and restore with one click, and a new machine pulls the whole configuration back after installing the plugin. Scheduled backups (daily / every N minutes / weekly) are supported; what gets synced is split into Configuration, Application state, and Secrets, the folder inside the repository is configurable, and only that subfolder is read or written.",
     "detail": "docs/DETAIL.md"
   }
 }
