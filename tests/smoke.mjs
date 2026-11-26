@@ -29,6 +29,12 @@ import {
 import {
   collectManifest, describeDependency, parseRepositoryUrl, planInstall, summarizeManifest,
 } from '../lib/plugins-manifest.js'
+import {
+  normalizePlatform, normalizePlatforms, supportsPlatform, applyOverride, detectPlatforms,
+} from '../lib/platform.js'
+import {
+  unsupportedPluginNames, rewritePackageJson, rewriteCordisPatch, rewriteFilesForPlatform,
+} from '../lib/config-rewrite.js'
 
 const tests = []
 const test = (name, fn) => tests.push({ name, fn })
@@ -464,6 +470,140 @@ test('同一插件出现在多个 profile 时只算一次', () => {
   ] }
   assert.equal(summarizeManifest(manifest).total, 1)
   assert.equal(summarizeManifest(manifest).git, 1)
+})
+
+// ---------------- 平台识别与跨平台同步 ----------------
+
+test('normalizePlatform / normalizePlatforms 归一化', () => {
+  assert.equal(normalizePlatform('macOS'), 'darwin')
+  assert.equal(normalizePlatform('Windows'), 'win32')
+  assert.equal(normalizePlatform('solaris'), undefined)
+  assert.deepEqual(normalizePlatforms(['darwin']), ['darwin'])
+  assert.deepEqual(normalizePlatforms([]), ['darwin', 'win32', 'linux'])
+  assert.deepEqual(normalizePlatforms('bad'), ['darwin', 'win32', 'linux'])
+})
+
+test('supportsPlatform：无 platforms 的老条目视为通用', () => {
+  assert.equal(supportsPlatform({ name: 'x' }, 'win32'), true)
+  assert.equal(supportsPlatform({ name: 'x', platforms: ['darwin'] }, 'win32'), false)
+  assert.equal(supportsPlatform({ name: 'x', platforms: ['darwin'] }, 'darwin'), true)
+  assert.equal(supportsPlatform({ name: 'x', platforms: ['darwin', 'win32'] }, 'win32'), true)
+})
+
+test('applyOverride 让手动覆盖优先于自动识别', () => {
+  assert.deepEqual(applyOverride(['darwin'], { x: ['win32'] }, 'x'), ['win32'])
+  assert.deepEqual(applyOverride(['darwin'], {}, 'x'), ['darwin'])
+})
+
+test('detectPlatforms：os 字段最权威', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plat-detect-'))
+  try {
+    const r = await detectPlatforms(dir, 'p', { os: ['darwin'] })
+    assert.deepEqual(r.platforms, ['darwin'])
+    assert.equal(r.source, 'os-field')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('detectPlatforms：macOS 系统 API 信号只把 Mac 插件判为专属，跨平台插件不误判', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plat-scan-'))
+  try {
+    await writeFile(join(dir, 'index.js'), "import { execFile } from 'node:child_process'\nexecFile('/usr/sbin/screencapture', ['-x'])\nif (process.platform !== 'darwin') return\n")
+    const mac = await detectPlatforms(dir, 'some-cua', { version: '1' })
+    assert.deepEqual(mac.platforms, ['darwin'])
+
+    // 跨平台插件：代码里有 Windows 支持、process.platform !== 'win32' 分支，
+    // 但没有 macOS 系统级调用 —— 必须判为通用，不能被误跳过。
+    await writeFile(join(dir, 'index.js'), "if (process.platform === 'win32') { exec('powershell') }\nconst p = 'C:\\\\Windows\\\\System32'\n")
+    const cross = await detectPlatforms(dir, 'cross-platform-thing', { version: '1' })
+    assert.deepEqual(cross.platforms, ['darwin', 'win32', 'linux'])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('planInstall 按目标平台过滤，清单条目不丢（双向）', () => {
+  const manifest = { profiles: [{ profile: 'desktop', plugins: [
+    { name: 'mac-only', kind: 'registry', spec: 'mac-only@1', platforms: ['darwin'] },
+    { name: 'win-only', kind: 'registry', spec: 'win-only@1', platforms: ['win32'] },
+    { name: 'common', kind: 'registry', spec: 'common@1', platforms: ['darwin', 'win32', 'linux'] },
+  ] }] }
+  const win = planInstall(manifest, 'desktop', 'win32')[0]
+  assert.deepEqual(win.add, ['win-only@1', 'common@1'])
+  assert.deepEqual(win.skippedPlatform.map((item) => item.name), ['mac-only'])
+  const mac = planInstall(manifest, 'desktop', 'darwin')[0]
+  assert.deepEqual(mac.add, ['mac-only@1', 'common@1'])
+  assert.deepEqual(mac.skippedPlatform.map((item) => item.name), ['win-only'])
+})
+
+test('summarizeManifest 统计平台专属数量', () => {
+  const manifest = { profiles: [{ profile: 'desktop', plugins: [
+    { name: 'm', platforms: ['darwin'] },
+    { name: 'w', platforms: ['win32'] },
+    { name: 'c', platforms: ['darwin', 'win32'] },
+  ] }] }
+  const s = summarizeManifest(manifest)
+  assert.equal(s.darwinOnly, 1)
+  assert.equal(s.win32Only, 1)
+  assert.equal(s.universal, 1)
+})
+
+test('unsupportedPluginNames 支持本机覆盖', () => {
+  const manifest = { profiles: [{ profile: 'desktop', plugins: [
+    { name: 'x', platforms: ['darwin'] },
+  ] }] }
+  assert.ok(unsupportedPluginNames(manifest, 'win32').has('x'))
+  assert.ok(!unsupportedPluginNames(manifest, 'win32', { x: ['darwin', 'win32'] }).has('x'))
+})
+
+test('rewritePackageJson 剔除 bundles 与 dependencies 里的不适用插件', () => {
+  const text = JSON.stringify({
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-mac-computer-use'] } },
+    dependencies: { 'dsh-mac-computer-use': '^1.5.5', common: '1.0.0' },
+  }, null, 2)
+  const next = rewritePackageJson(text, new Set(['dsh-mac-computer-use']))
+  const parsed = JSON.parse(next)
+  assert.deepEqual(parsed.dsh.profile.bundles, ['@deepseek-ai/dsh-base'])
+  assert.deepEqual(Object.keys(parsed.dependencies), ['common'])
+})
+
+test('rewriteCordisPatch 只删顶层条目，保留内部多行与 !!js', () => {
+  const text = [
+    '# header',
+    '- id: keep',
+    '  name: keep-plugin',
+    '  config:',
+    '    key: !!js process.env.X',
+    '- id: dsh-mac-computer-use',
+    '  name: dsh-mac-computer-use',
+    '  config:',
+    '    nested:',
+    '      - a',
+    '- id: other',
+    '  name: other-plugin',
+  ].join('\n')
+  const next = rewriteCordisPatch(text, new Set(['dsh-mac-computer-use']))
+  assert.ok(!next.includes('dsh-mac-computer-use'))
+  assert.ok(next.includes('key: !!js process.env.X'))
+  assert.ok(next.includes('name: other-plugin'))
+  assert.ok(next.includes('# header'))
+})
+
+test('rewriteFilesForPlatform 只改写相关文件，报告被剔除插件', async () => {
+  const manifest = { profiles: [{ profile: 'desktop', plugins: [
+    { name: 'mac-only', platforms: ['darwin'] },
+  ] }] }
+  const files = [
+    { rel: 'profiles/desktop/package.json', buffer: Buffer.from('{"dependencies":{"mac-only":"1","x":"1"}}') },
+    { rel: 'profiles/desktop/cordis.patch.yml', buffer: Buffer.from('- id: mac-only\n  name: mac-only\n') },
+    { rel: 'storages/workspace.json', buffer: Buffer.from('{"a":1}') },
+  ]
+  const result = rewriteFilesForPlatform(files, manifest, 'win32', {})
+  assert.deepEqual(result.rewritten.sort(), ['profiles/desktop/cordis.patch.yml', 'profiles/desktop/package.json'])
+  assert.deepEqual(result.dropped, ['mac-only'])
+  assert.deepEqual(JSON.parse(result.files[0].buffer.toString()).dependencies, { x: '1' })
+  assert.equal(result.files[2].buffer.toString(), '{"a":1}', '无关文件不该动')
 })
 
 // ---------------- 跑 ----------------

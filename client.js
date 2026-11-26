@@ -63,6 +63,9 @@ window.__ModuleLoader__.load({
       pluginsFailed: '这些装失败了',
       pluginsEmpty: '清单里没有需要安装的插件',
       pluginsConfirm: '将把这些插件装到当前 profile：',
+      pluginsPlatform: '当前平台',
+      pluginsSkippedPlatform: '不适配当前平台，已跳过',
+      pluginsSkippedWhy: '这些插件只适配别的平台，装回时跳过；清单仍保留，换到对应平台可再装',
       scheduleLabel: '定时备份',
       scheduleHint: '到点自动把本机配置推到仓库；只备份，不会自动恢复',
       scheduleOff: '关闭',
@@ -141,6 +144,9 @@ window.__ModuleLoader__.load({
       pluginsFailed: 'These failed to install',
       pluginsEmpty: 'Nothing to install from the list',
       pluginsConfirm: 'The following plugins will be installed into the current profile:',
+      pluginsPlatform: 'Current platform',
+      pluginsSkippedPlatform: 'Skipped: not for this platform',
+      pluginsSkippedWhy: 'These plugins only support another platform and are skipped; they stay in the list and can be installed on a matching machine',
       scheduleLabel: 'Scheduled backup',
       scheduleHint: 'Pushes the local configuration to the repository on a schedule; backup only, never restores',
       scheduleOff: 'Off',
@@ -656,6 +662,7 @@ window.__ModuleLoader__.load({
     function PluginsPanel({ t, info, disabled, onExport, onInstall }) {
       const add = info?.add ?? []
       const manual = info?.manual ?? []
+      const skipped = info?.skippedPlatform ?? []
       const available = info?.available === true
       const canInstall = available && add.length > 0
 
@@ -664,7 +671,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'dsync-hint' },
               info === null ? '…' : (info.message ?? t('pluginsNoManifest')))
           : h('div', { className: 'dsync-sched-next' },
-              `${t('scheduleNext')} ${add.length} 个 · ${info.profile} · ${
+              `${t('scheduleNext')} ${add.length} 个 · ${info.profile} · ${t('pluginsPlatform')} ${info.platform ?? '-'} · ${
                 info.generatedAt ? formatLocal(info.generatedAt) : ''
               }`),
         available && Array.isArray(info.fromProfiles) && info.fromProfiles.length > 0
@@ -690,6 +697,15 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dsync-hint' }, t('pluginsManualWhy')),
               h('ul', { className: 'dsync-list' },
                 manual.slice(0, 12).map((item) => h('li', { key: item.name, className: 'dsync-mono' }, item.name))))
+          : null,
+
+        available && skipped.length > 0
+          ? h('div', null,
+              h('div', { className: 'dsync-label dsync-warn' }, `${t('pluginsSkippedPlatform')}（${skipped.length}）`),
+              h('div', { className: 'dsync-hint' }, t('pluginsSkippedWhy')),
+              h('ul', { className: 'dsync-list' },
+                skipped.slice(0, 12).map((item) => h('li', { key: item.name, className: 'dsync-mono' },
+                  `${item.name}（${(item.platforms ?? []).join('/')}）`))))
           : null,
 
         h('div', { className: 'dsync-actions' },

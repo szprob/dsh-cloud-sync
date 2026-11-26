@@ -74,6 +74,40 @@ dsh: skipping profile bundle "dsh-eye-care": cannot resolve profile bundle...
 
 装完**必须重启 DSH** 才会加载新插件：插件代码是宿主进程启动时加载的，界面会把这句话说清楚，但不会替用户重启。
 
+### Mac ↔ Windows 双向同步
+
+清单会**自动标注每个插件支持哪些平台**，跨平台搬运时只装适配目标机器的插件：
+
+| 情况 | 行为 |
+|---|---|
+| Mac → Windows | 清单里的 Mac 专属插件（如 `dsh-mac-computer-use`）不在 Windows 上安装，配置段也会剔除 |
+| Windows → Mac | 同一个清单回到 Mac 时，那些插件又能正常装回 |
+
+平台信息写在清单条目的 `platforms` 字段里（`darwin` / `win32` / `linux`）。自动识别的优先级：
+
+1. 包 `package.json` 的 `os` 字段（npm 标准，最权威）；
+2. 代码里的 macOS 系统级 API（`osascript` / `screencapture` / `CGWindow` 等）；
+3. 包名前缀（`dsh-mac-*` / `win-*`）。
+
+**判定宁可漏判、不可误判**：跨平台插件里也有 Windows 路径处理、`process.platform !== 'win32'` 分支，这些不算专属信号，不会被误跳过。
+
+平台过滤发生在两处：
+
+- **一键装回**：按目标平台过滤 `add` 列表；被跳过的插件仍留在清单里（`skippedPlatform`），换到对应平台还能装回来；
+- **配置恢复**：从仓库拉回来的 `package.json`（bundles / dependencies）和 `cordis.patch.yml`（顶层配置段）会按目标平台剔除不适用插件再写盘，避免 Windows 启动时去加载 Mac 插件。
+
+**手动修正**：在 `~/.dsh/cloud-sync/platform-overrides.json` 里声明即可覆盖自动识别。这个文件**每机独立、不随同步传播**：
+
+```json
+{
+  "my-special-plugin": ["darwin"],
+  "$platform": "win32"
+}
+```
+
+- 每个键是包名，值是平台数组；`$platform` 强制把当前机器当成另一个平台（用于测试或在 Windows 上还原 Mac 配置）。
+- 恢复时报告里会列出 `droppedPlatformPlugins`（被剔除的插件）和 `rewrittenFiles`（被改写的配置文件），覆盖前照常备份。
+
 ### 定时备份
 
 「设置 → 云同步」底部的 **定时备份** 支持三种周期：
@@ -171,6 +205,8 @@ dsh/
 
 **为什么跳过符号链接**：`~/.dsh/skills` 指向 `~/git/skills`，那是一整个 git 仓库。跟随链接会把几百个文件拖进同步仓库。
 
+**为什么不把平台专属插件从清单里删掉**：Mac 的清单带到 Windows 不装 Mac 插件，但同一份清单回到 Mac 还要能装回来。所以过滤只发生在「装」和「写配置」的那一刻，清单本身始终保留完整条目。
+
 ## 边界
 
 - **只处理 `~/.dsh` 内的文件**。IDE 的私有存储（Trae 的 `storage.json`、WorkBuddy 的 vault）不在同步范围，也不该由这个插件碰。
@@ -200,8 +236,10 @@ lib/github.js     GitHub REST 客户端（Git Data API）
 lib/gitcli.js     本机 git 传输
 lib/sync.js       同步引擎：收集、diff、推送、拉取
 lib/service.js    业务编排，UI 与工具共用
-lib/plugins-manifest.js  插件清单：依赖 → 可安装 spec 的反推
-lib/pnpm.js       定位 DSH 自带的 pnpm 并执行安装
+lib/plugins-manifest.js  插件清单：依赖 → 可安装 spec 的反推 + 平台标注
+lib/platform.js   平台识别（os 字段 / 代码信号 / 名称）与手动覆盖
+lib/config-rewrite.js  恢复时按目标平台改写 package.json / cordis.patch.yml
+lib/pnpm.js       定位 DSH 自带的 pnpm（macOS / Windows 布局）并执行安装
 lib/schedule.js   定时备份的排期计算与调度循环
 lib/tools.js      agent 工具
 lib/api.js        HTTP 路由
